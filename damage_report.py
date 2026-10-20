@@ -5,7 +5,7 @@ import urllib.parse
 # ==========================================
 # 參數配置區
 # ==========================================
-IMGBB_API_KEY = "18af620f9ae7d13d7f46eedc8d2a1664"
+IMGBB_API_KEY = st.secrets["IMGBB_API_KEY"]
 
 # 設定多組 CS 聯絡人資料
 CS_CONTACTS = {
