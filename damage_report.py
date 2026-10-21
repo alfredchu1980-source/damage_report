@@ -1,9 +1,9 @@
 import streamlit as st
 import requests
 import urllib.parse
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from pyzbar.pyzbar import decode
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 
 # ==========================================
@@ -20,7 +20,7 @@ CS_CONTACTS = {
     "CS_CHINA": {"phone": "85296488174", "apikey": "4339950"}
 }
 
-# 更新後的雙語免責聲明（移除銷售字眼）
+# 雙語免責聲明（移除銷售字眼）
 WARNING_TEXT_ZH = "如果兩日內 貴公司未有對有關貨物的處理，向本公司作出任何指示，本公司將會棄置或處理有關貨物，日後亦不作出任何形式的賠償。"
 WARNING_TEXT_EN = "If your company does not provide any instructions regarding the handling of the goods within two days, our company will dispose of the goods and will not provide any form of compensation in the future."
 
@@ -28,11 +28,13 @@ WARNING_TEXT_EN = "If your company does not provide any instructions regarding t
 # 服務層：影像處理與 API
 # ==========================================
 def process_image_with_watermark(image_bytes):
-    """加上紅色時間戳記 (精確至分鐘)"""
+    """加上紅色時間戳記 (精確至分鐘，鎖定香港時間 UTC+8)"""
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     draw = ImageDraw.Draw(img)
     
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # 伺服器時間轉為香港時間 (UTC+8)
+    hk_time = datetime.utcnow() + timedelta(hours=8)
+    current_time = hk_time.strftime("%Y-%m-%d %H:%M")
     
     # 動態調整字體大小以適應高畫質手機照片
     font_size = max(40, int(img.height / 20))
@@ -46,13 +48,13 @@ def process_image_with_watermark(image_bytes):
 
     x, y = 40, 40 # 放置於左上角
     
-    # 畫上黑色描邊以防背景太亮導致紅字不清
+    # 黑色描邊強化對比
     outline_color = "black"
     for adj_x in [-2, 0, 2]:
         for adj_y in [-2, 0, 2]:
             draw.text((x + adj_x, y + adj_y), current_time, font=font, fill=outline_color)
             
-    # 畫上鮮紅色主文字
+    # 鮮紅色文字
     draw.text((x, y), current_time, font=font, fill="red")
     
     output = io.BytesIO()
@@ -60,12 +62,24 @@ def process_image_with_watermark(image_bytes):
     return output.getvalue()
 
 def extract_barcode(image_bytes):
-    """從原始圖片擷取條碼"""
+    """從圖片擷取條碼 (雙重嘗試：原圖掃描 + 灰階對比強化)"""
     try:
-        img = Image.open(io.BytesIO(image_bytes))
-        decoded_objects = decode(img)
+        raw_img = Image.open(io.BytesIO(image_bytes))
+        
+        # 第一次嘗試：原圖直接解碼
+        decoded_objects = decode(raw_img)
         if decoded_objects:
             return decoded_objects[0].data.decode("utf-8")
+        
+        # 第二次嘗試：轉灰階並將對比度拉高 2 倍，應對反光與陰影
+        gray_img = raw_img.convert('L')
+        enhancer = ImageEnhance.Contrast(gray_img)
+        enhanced_img = enhancer.enhance(2.0)
+        
+        decoded_objects = decode(enhanced_img)
+        if decoded_objects:
+            return decoded_objects[0].data.decode("utf-8")
+            
         return None
     except Exception:
         return None
@@ -124,11 +138,11 @@ if uploaded_files:
             for file in uploaded_files:
                 original_bytes = file.getvalue()
                 
-                # 1. 嘗試掃描條碼 (用未經處理的原始圖掃描最準確)
+                # 1. 嘗試掃描條碼 (只記錄第一個成功掃到的條碼)
                 if not detected_barcode:
                     detected_barcode = extract_barcode(original_bytes)
                 
-                # 2. 壓印紅色時間戳記
+                # 2. 壓印紅色時間戳記 (本地時間)
                 watermarked_bytes = process_image_with_watermark(original_bytes)
                 
                 # 3. 上傳至 ImgBB
@@ -168,6 +182,6 @@ if uploaded_files:
                     st.success(f"✅ 報告已成功發送！(條碼：{barcode_text})")
                     st.balloons()
                 else:
-                    st.warning("⚠️ 部分 WhatsApp 發送失敗，請確認 CallMeBot 設定。")
+                    st.warning("⚠️ 部分 WhatsApp 發送失敗，請確認 CallMeBot 配額或設定。")
             else:
                 st.error("❌ 圖片上傳圖床失敗。")
