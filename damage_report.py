@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
 import urllib.parse
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from pyzbar.pyzbar import decode
+from datetime import datetime
 import io
 
 # ==========================================
@@ -19,12 +20,56 @@ CS_CONTACTS = {
     "CS_CHINA": {"phone": "85296488174", "apikey": "4339950"}
 }
 
-WARNING_TEXT_ZH = "如果兩日內 貴公司未有對有關貨物的處理，向本公司作出任何指示，本公司將會銷售(處理)有關貨物，日後亦不作出任何形式的賠償。"
-WARNING_TEXT_EN = "If your company does not provide any instructions regarding the handling of the goods within two days, our company will dispose of/sell the goods and will not provide any form of compensation in the future."
+# 更新後的雙語免責聲明（移除銷售字眼）
+WARNING_TEXT_ZH = "如果兩日內 貴公司未有對有關貨物的處理，向本公司作出任何指示，本公司將會棄置或處理有關貨物，日後亦不作出任何形式的賠償。"
+WARNING_TEXT_EN = "If your company does not provide any instructions regarding the handling of the goods within two days, our company will dispose of the goods and will not provide any form of compensation in the future."
 
 # ==========================================
-# 服務層：API 處理與條碼識別
+# 服務層：影像處理與 API
 # ==========================================
+def process_image_with_watermark(image_bytes):
+    """加上紅色時間戳記 (精確至分鐘)"""
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    # 動態調整字體大小以適應高畫質手機照片
+    font_size = max(40, int(img.height / 20))
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+    except IOError:
+        try:
+            font = ImageFont.truetype("FreeMono.ttf", font_size)
+        except IOError:
+            font = ImageFont.load_default()
+
+    x, y = 40, 40 # 放置於左上角
+    
+    # 畫上黑色描邊以防背景太亮導致紅字不清
+    outline_color = "black"
+    for adj_x in [-2, 0, 2]:
+        for adj_y in [-2, 0, 2]:
+            draw.text((x + adj_x, y + adj_y), current_time, font=font, fill=outline_color)
+            
+    # 畫上鮮紅色主文字
+    draw.text((x, y), current_time, font=font, fill="red")
+    
+    output = io.BytesIO()
+    img.save(output, format="JPEG")
+    return output.getvalue()
+
+def extract_barcode(image_bytes):
+    """從原始圖片擷取條碼"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        decoded_objects = decode(img)
+        if decoded_objects:
+            return decoded_objects[0].data.decode("utf-8")
+        return None
+    except Exception:
+        return None
+
 def upload_image_to_imgbb(image_bytes):
     url = "https://api.imgbb.com/1/upload"
     payload = {"key": IMGBB_API_KEY}
@@ -33,17 +78,6 @@ def upload_image_to_imgbb(image_bytes):
         response = requests.post(url, data=payload, files=files)
         if response.status_code == 200:
             return response.json()["data"]["url"]
-        return None
-    except Exception as e:
-        return None
-
-def extract_barcode(image_bytes):
-    """從圖片位元組中擷取條碼"""
-    try:
-        img = Image.open(io.BytesIO(image_bytes))
-        decoded_objects = decode(img)
-        if decoded_objects:
-            return decoded_objects[0].data.decode("utf-8")
         return None
     except Exception:
         return None
@@ -75,8 +109,7 @@ damage_reasons = [
 ]
 selected_reason = st.selectbox("請選擇損壞情況：", damage_reasons)
 
-# 改用 file_uploader 支援多檔與手機原生相機/相簿選擇
-uploaded_files = st.file_uploader("拍攝或上傳照片 (最多 3 張，系統將自動掃描條碼)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("拍攝或上傳照片 (最多 3 張，系統將自動掃描條碼與加註時間)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
 if uploaded_files:
     if len(uploaded_files) > 3:
@@ -84,20 +117,22 @@ if uploaded_files:
         uploaded_files = uploaded_files[:3]
 
     if st.button("📤 提交並通知", use_container_width=True):
-        with st.spinner("系統處理中：掃描條碼、上傳圖片與發送訊息..."):
+        with st.spinner("系統處理中：掃描條碼、加註浮水印、上傳圖片與發送訊息..."):
             image_urls = []
             detected_barcode = None
 
-            # 處理每一張照片
             for file in uploaded_files:
-                file_bytes = file.getvalue()
+                original_bytes = file.getvalue()
                 
-                # 若尚未找到條碼，則嘗試從當前圖片中讀取
+                # 1. 嘗試掃描條碼 (用未經處理的原始圖掃描最準確)
                 if not detected_barcode:
-                    detected_barcode = extract_barcode(file_bytes)
+                    detected_barcode = extract_barcode(original_bytes)
                 
-                # 上傳至 ImgBB
-                img_url = upload_image_to_imgbb(file_bytes)
+                # 2. 壓印紅色時間戳記
+                watermarked_bytes = process_image_with_watermark(original_bytes)
+                
+                # 3. 上傳至 ImgBB
+                img_url = upload_image_to_imgbb(watermarked_bytes)
                 if img_url:
                     image_urls.append(img_url)
 
@@ -130,9 +165,9 @@ if uploaded_files:
                         all_success = False
                 
                 if all_success:
-                    st.success(f"✅ 報告已成功發送！(找到條碼：{barcode_text})")
+                    st.success(f"✅ 報告已成功發送！(條碼：{barcode_text})")
                     st.balloons()
                 else:
-                    st.warning("⚠️ 部分 WhatsApp 發送失敗。")
+                    st.warning("⚠️ 部分 WhatsApp 發送失敗，請確認 CallMeBot 設定。")
             else:
                 st.error("❌ 圖片上傳圖床失敗。")
