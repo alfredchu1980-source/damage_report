@@ -108,8 +108,8 @@ def send_whatsapp_alert(message, phone, apikey):
 # ==========================================
 # 介面層：Streamlit UI
 # ==========================================
-st.set_page_config(page_title="貨品損壞報告系統", page_icon="📦")
-st.title("📦 快速損壞報告")
+st.set_page_config(page_title="貨品異常報告系統", page_icon="📦")
+st.title("📦 快速異常/損壞報告")
 
 target_options = ["全部通知 (All)"] + list(CS_CONTACTS.keys())
 selected_target = st.selectbox("請選擇通知對象：", target_options)
@@ -119,9 +119,20 @@ damage_reasons = [
     "產品滲漏 / 液體流出",
     "封口破裂 / 失去真空",
     "溫度異常 / 懷疑變質",
-    "產品外觀凹陷 / 刮花"
+    "產品外觀凹陷 / 刮花",
+    "實際入庫數量和預報不符"
 ]
-selected_reason = st.selectbox("請選擇損壞情況：", damage_reasons)
+selected_reason = st.selectbox("請選擇情況：", damage_reasons)
+
+# 初始化數量差異變數
+discrepancy_type = ""
+discrepancy_qty = 0
+
+# 動態展開數量差異填寫區
+if selected_reason == "實際入庫數量和預報不符":
+    st.info("⚠️ 數量差異詳情")
+    discrepancy_type = st.radio("類型：", ["多收", "少收"], horizontal=True)
+    discrepancy_qty = st.number_input(f"{discrepancy_type}數量：", min_value=1, step=1)
 
 uploaded_files = st.file_uploader("拍攝或上傳照片 (最多 3 張，系統將自動掃描條碼與加註時間)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
@@ -138,7 +149,7 @@ if uploaded_files:
             for file in uploaded_files:
                 original_bytes = file.getvalue()
                 
-                # 1. 嘗試掃描條碼 (只記錄第一個成功掃到的條碼)
+                # 1. 嘗試掃描條碼
                 if not detected_barcode:
                     detected_barcode = extract_barcode(original_bytes)
                 
@@ -151,13 +162,20 @@ if uploaded_files:
                     image_urls.append(img_url)
 
             if image_urls:
-                # 組合 WhatsApp 訊息
                 barcode_text = f"{detected_barcode}" if detected_barcode else "未偵測到條碼"
                 
+                # 根據選項動態組合最終的標題與狀態文字
+                if selected_reason == "實際入庫數量和預報不符":
+                    msg_title = "🚨 [數量異常報告]"
+                    final_reason = f"{selected_reason} ({discrepancy_type} {discrepancy_qty} 件)"
+                else:
+                    msg_title = "🚨 [損壞報告]"
+                    final_reason = selected_reason
+                
                 msg_lines = [
-                    "🚨 [損壞報告]",
+                    msg_title,
                     f"單號/條碼：{barcode_text}",
-                    f"狀態：{selected_reason}",
+                    f"狀態：{final_reason}",
                     "照片連結："
                 ]
                 
