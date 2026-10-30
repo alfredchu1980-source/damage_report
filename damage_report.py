@@ -9,11 +9,6 @@ import io
 # ==========================================
 # 參數配置區
 # ==========================================
-try:
-    IMGBB_API_KEY = st.secrets["IMGBB_API_KEY"]
-except:
-    IMGBB_API_KEY = "18af620f9ae7d13d7f46eedc8d2a1664" # 本地測試備用
-
 CS_CONTACTS = {
     "CS_1": {"phone": "85254494485", "apikey": "7932406"},
     "CS_2": {"phone": "85293487111", "apikey": "5290226"},
@@ -76,14 +71,19 @@ def extract_barcode(image_bytes):
     except Exception:
         return None
 
-def upload_image_to_imgbb(image_bytes):
-    url = "https://api.imgbb.com/1/upload"
-    payload = {"key": IMGBB_API_KEY}
-    files = {"image": image_bytes}
+def upload_image_to_cloudinary(image_bytes):
+    """上傳圖片至 Cloudinary (免密碼上傳)"""
+    cloud_name = "piic2wdz"
+    upload_preset = "damagereport"
+    
+    url = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
+    data = {"upload_preset": upload_preset}
+    files = {"file": image_bytes}
+    
     try:
-        response = requests.post(url, data=payload, files=files)
+        response = requests.post(url, data=data, files=files)
         if response.status_code == 200:
-            return response.json()["data"]["url"]
+            return response.json()["secure_url"]
         return None
     except Exception:
         return None
@@ -134,7 +134,7 @@ if st.button("➕ 處理並加入清單", use_container_width=True, type="primar
     if not uploaded_files:
         st.warning("⚠️ 請至少上傳一張照片！")
     else:
-        with st.spinner("處理中：讀取條碼與上傳照片..."):
+        with st.spinner("處理中：讀取條碼與上傳照片至 Cloudinary..."):
             files_to_process = uploaded_files[:3]
             image_urls = []
             detected_barcode = None
@@ -145,7 +145,7 @@ if st.button("➕ 處理並加入清單", use_container_width=True, type="primar
                     detected_barcode = extract_barcode(original_bytes)
                 
                 watermarked_bytes = process_image_with_watermark(original_bytes)
-                img_url = upload_image_to_imgbb(watermarked_bytes)
+                img_url = upload_image_to_cloudinary(watermarked_bytes)
                 if img_url:
                     image_urls.append(img_url)
             
@@ -164,7 +164,7 @@ if st.button("➕ 處理並加入清單", use_container_width=True, type="primar
                 st.session_state.uploader_key += 1
                 st.rerun()
             else:
-                st.error("❌ 照片上傳圖床失敗，請重試。")
+                st.error("❌ 照片上傳至 Cloudinary 失敗，請重試。")
 
 st.divider()
 st.subheader(f"2. 待發送清單 ({len(st.session_state.cart)} 項)")
