@@ -30,12 +30,23 @@ if 'uploader_key' not in st.session_state:
 # 服務層：影像處理與 API
 # ==========================================
 def process_image_with_watermark(image_bytes):
-    """加上紅色時間戳記 (精確至分鐘，鎖定香港時間 UTC+8)"""
+def process_image_with_watermark(image_bytes, max_size=(1280, 1280), quality=75):
+    """調整尺寸、加上紅色時間戳記並壓縮圖片大小以加快上傳速度"""
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    
+    # 1. 調整圖片尺寸 (保持長寬比)，這會大幅減少像素量
+    if hasattr(Image, 'Resampling'):
+        img.thumbnail(max_size, Image.Resampling.LANCZOS)
+    else:
+        # 兼容舊版 Pillow
+        img.thumbnail(max_size, Image.LANCZOS)
+
     draw = ImageDraw.Draw(img)
     hk_time = datetime.utcnow() + timedelta(hours=8)
     current_time = hk_time.strftime("%Y-%m-%d %H:%M")
-    font_size = max(40, int(img.height / 20))
+    
+    # 根據縮小後的圖片高度動態調整字體大小，避免浮水印過大
+    font_size = max(30, int(img.height / 20))
     try:
         font = ImageFont.truetype("DejaVuSans.ttf", font_size)
     except IOError:
@@ -43,14 +54,17 @@ def process_image_with_watermark(image_bytes):
             font = ImageFont.truetype("FreeMono.ttf", font_size)
         except IOError:
             font = ImageFont.load_default()
-    x, y = 40, 40 
+            
+    x, y = 20, 20 # 稍微縮小邊距
     outline_color = "black"
     for adj_x in [-2, 0, 2]:
         for adj_y in [-2, 0, 2]:
             draw.text((x + adj_x, y + adj_y), current_time, font=font, fill=outline_color)
     draw.text((x, y), current_time, font=font, fill="red")
+    
     output = io.BytesIO()
-    img.save(output, format="JPEG")
+    # 2. 儲存時設定 quality=75 與 optimize=True 進行深度壓縮
+    img.save(output, format="JPEG", quality=quality, optimize=True)
     return output.getvalue()
 
 def extract_barcode(image_bytes):
