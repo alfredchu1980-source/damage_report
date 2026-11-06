@@ -120,12 +120,15 @@ damage_reasons = [
 selected_reason = st.selectbox("請選擇情況：", damage_reasons)
 
 discrepancy_type = ""
-discrepancy_qty = 0
+item_qty = 0
 
+# 針對不同情況顯示不同的數量輸入介面
 if selected_reason == "實際入庫數量和預報不符":
     st.info("⚠️ 數量差異詳情")
     discrepancy_type = st.radio("類型：", ["多收", "少收"], horizontal=True)
-    discrepancy_qty = st.number_input(f"{discrepancy_type}數量：", min_value=1, step=1)
+    item_qty = st.number_input(f"{discrepancy_type}數量：", min_value=1, step=1)
+else:
+    item_qty = st.number_input("異常數量 (Qty)：", min_value=1, step=1)
 
 # 使用動態 Key，讓加入清單後能自動清空上傳框
 uploaded_files = st.file_uploader("拍攝或上傳照片 (此 SKU 限定最多 3 張)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}")
@@ -150,7 +153,12 @@ if st.button("➕ 處理並加入清單", use_container_width=True, type="primar
                     image_urls.append(img_url)
             
             if image_urls:
-                final_reason = f"{selected_reason} ({discrepancy_type} {discrepancy_qty} 件)" if selected_reason == "實際入庫數量和預報不符" else selected_reason
+                # 將數量資訊整合進 final_reason
+                if selected_reason == "實際入庫數量和預報不符":
+                    final_reason = f"{selected_reason} ({discrepancy_type} {item_qty} 件)"
+                else:
+                    final_reason = f"{selected_reason} (共 {item_qty} 件)"
+                
                 barcode_text = f"{detected_barcode}" if detected_barcode else "未偵測到條碼"
                 
                 # 寫入購物車清單
