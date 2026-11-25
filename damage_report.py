@@ -99,14 +99,20 @@ def upload_image_to_cloudinary(image_bytes):
         return None
 
 def send_whatsapp_alert(message, phone, apikey):
-    encoded_msg = urllib.parse.quote(message)
-    url = f"https://api.callmebot.com/whatsapp.php?phone={phone}&text={encoded_msg}&apikey={apikey}"
+    url = "https://api.callmebot.com/whatsapp.php"
+    payload = {
+        "phone": phone,
+        "text": message,
+        "apikey": apikey
+    }
     try:
-        response = requests.get(url)
+        # 改用 POST 將資料放在 body (data)，突破 GET 的 URL 長度限制
+        response = requests.post(url, data=payload)
         return response.status_code == 200
-    except Exception:
+    except Exception as e:
+        print(f"WhatsApp API 發送失敗: {e}")
         return False
-
+    
 # ==========================================
 # 介面層：Streamlit UI
 # ==========================================
