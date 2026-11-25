@@ -67,4 +67,174 @@ def process_image_with_watermark(image_bytes, max_size=(1280, 1280), quality=75)
 def extract_barcode(image_bytes):
     """從圖片擷取條碼 (雙重嘗試：原圖掃描 + 灰階對比強化)"""
     try:
-        raw_img
+        raw_img = Image.open(io.BytesIO(image_bytes))
+        decoded_objects = decode(raw_img)
+        if decoded_objects:
+            return decoded_objects[0].data.decode("utf-8")
+        
+        gray_img = raw_img.convert('L')
+        enhancer = ImageEnhance.Contrast(gray_img)
+        enhanced_img = enhancer.enhance(2.0)
+        decoded_objects = decode(enhanced_img)
+        if decoded_objects:
+            return decoded_objects[0].data.decode("utf-8")
+        return None
+    except Exception:
+        return None
+
+def upload_image_to_cloudinary(image_bytes):
+    """上傳圖片至 Cloudinary (免密碼上傳)"""
+    cloud_name = "piic2wdz"
+    upload_preset = "damagereport"
+    
+    url = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
+    data = {"upload_preset": upload_preset}
+    files = {"file": image_bytes}
+    
+    try:
+        response = requests.post(url, data=data, files=files)
+        if response.status_code == 200:
+            return response.json()["secure_url"]
+        return None
+    except Exception:
+        return None
+
+def send_whatsapp_alert(message, phone, apikey):
+    """透過 CallMeBot 發送 WhatsApp (使用 GET 請求與 URL 編碼)"""
+    encoded_msg = urllib.parse.quote(message)
+    url = f"https://api.callmebot.com/whatsapp.php?phone={phone}&text={encoded_msg}&apikey={apikey}"
+    try:
+        response = requests.get(url)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"WhatsApp API 發送失敗: {e}")
+        return False
+
+# ==========================================
+# 介面層：Streamlit UI
+# ==========================================
+st.set_page_config(page_title="貨品異常報告系統", page_icon="📦")
+st.title("📦 批量異常/損壞報告")
+
+target_options = ["全部通知 (All)"] + list(CS_CONTACTS.keys())
+selected_target = st.selectbox("請選擇通知對象 (發送時生效)：", target_options)
+
+st.divider()
+st.subheader("1. 新增項目")
+
+damage_reasons = [
+    "包裝嚴重破損 / 外箱變形",
+    "產品滲漏 / 液體流出",
+    "封口破裂 / 失去真空",
+    "溫度異常 / 懷疑變質",
+    "產品外觀凹陷 / 刮花",
+    "實際入庫數量和預報不符"
+]
+selected_reason = st.selectbox("請選擇情況：", damage_reasons)
+
+discrepancy_type = ""
+item_qty = 0
+
+if selected_reason == "實際入庫數量和預報不符":
+    st.info("⚠️ 數量差異詳情")
+    discrepancy_type = st.radio("類型：", ["多收", "少收"], horizontal=True)
+    item_qty = st.number_input(f"{discrepancy_type}數量：", min_value=1, step=1)
+else:
+    item_qty = st.number_input("異常數量 (Qty)：", min_value=1, step=1)
+
+uploaded_files = st.file_uploader("拍攝或上傳照片 (此 SKU 限定最多 3 張)", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}")
+
+if st.button("➕ 處理並加入清單", use_container_width=True, type="primary"):
+    if not uploaded_files:
+        st.warning("⚠️ 請至少上傳一張照片！")
+    else:
+        with st.spinner("處理中：讀取條碼與上傳照片至 Cloudinary..."):
+            files_to_process = uploaded_files[:3]
+            image_urls = []
+            detected_barcode = None
+
+            for file in files_to_process:
+                original_bytes = file.getvalue()
+                if not detected_barcode:
+                    detected_barcode = extract_barcode(original_bytes)
+                
+                watermarked_bytes = process_image_with_watermark(original_bytes)
+                img_url = upload_image_to_cloudinary(watermarked_bytes)
+                if img_url:
+                    image_urls.append(img_url)
+            
+            if image_urls:
+                if selected_reason == "實際入庫數量和預報不符":
+                    final_reason = f"{selected_reason} ({discrepancy_type} {item_qty} 件)"
+                else:
+                    final_reason = f"{selected_reason} (共 {item_qty} 件)"
+                
+                barcode_text = f"{detected_barcode}" if detected_barcode else "未偵測到條碼"
+                
+                st.session_state.cart.append({
+                    "barcode": barcode_text,
+                    "reason": final_reason,
+                    "images": image_urls
+                })
+                
+                st.session_state.uploader_key += 1
+                st.rerun()
+            else:
+                st.error("❌ 照片上傳至 Cloudinary 失敗，請重試。")
+
+st.divider()
+st.subheader(f"2. 待發送清單 ({len(st.session_state.cart)} 項)")
+
+if not st.session_state.cart:
+    st.info("清單目前是空的。請在上方新增項目。")
+else:
+    for idx, item in enumerate(st.session_state.cart, 1):
+        st.markdown(f"**項目 {idx}** | 條碼：`{item['barcode']}` | 狀態：{item['reason']} | 附圖：{len(item['images'])} 張")
+    
+    if st.button("🗑️ 清空清單"):
+        st.session_state.cart = []
+        st.rerun()
+
+    if st.button("📤 分批發送所有報告 (避開字數限制)", use_container_width=True):
+        with st.spinner("正在分批發送報告至 WhatsApp (為避免被系統封鎖，每封會間隔 2 秒)..."):
+            targets_to_send = list(CS_CONTACTS.values()) if selected_target == "全部通知 (All)" else [CS_CONTACTS[selected_target]]
+            all_success = True
+            
+            for contact in targets_to_send:
+                # 1. 發送總標題
+                header_msg = f"🚨 [批量異常/損壞報告] (共 {len(st.session_state.cart)} 項)"
+                if not send_whatsapp_alert(header_msg, contact["phone"], contact["apikey"]):
+                    all_success = False
+                time.sleep(2)  # 暫停 2 秒，避免被系統判定為刷屏
+                
+                # 2. 逐項發送每個異常報告
+                for idx, item in enumerate(st.session_state.cart, 1):
+                    msg_lines = [f"--- 項目 {idx} ---"]
+                    msg_lines.append(f"單號/條碼：{item['barcode']}")
+                    msg_lines.append(f"狀態：{item['reason']}")
+                    msg_lines.append("照片：")
+                    for img_idx, url in enumerate(item['images'], 1):
+                        msg_lines.append(f"圖 {img_idx}: {url}")
+                    
+                    item_msg = "\n".join(msg_lines)
+                    if not send_whatsapp_alert(item_msg, contact["phone"], contact["apikey"]):
+                        all_success = False
+                    
+                    time.sleep(2)  # 發送每一筆異常報告後暫停 2 秒
+                
+                # 3. 發送結尾聲明
+                disclaimer_msg = "⚠️ 聲明 / Declaration:\n" + WARNING_TEXT_ZH + "\n" + WARNING_TEXT_EN
+                if not send_whatsapp_alert(disclaimer_msg, contact["phone"], contact["apikey"]):
+                    all_success = False
+                time.sleep(2)
+            
+            if all_success:
+                st.success("✅ 批量報告已全數分批發送完成！")
+                st.balloons()
+                # 發送成功後清空購物車與 UI
+                st.session_state.cart = []
+                st.session_state.uploader_key += 1
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.warning("⚠️ 部分發送失敗，請確認 CallMeBot 設定或網絡狀態。")
